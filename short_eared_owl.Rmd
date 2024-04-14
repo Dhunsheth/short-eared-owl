@@ -1,0 +1,60 @@
+---
+title: "Short Eared Owl"
+author: "Dhun Sheth"
+date: "2024-04-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE, warning=FALSE}
+load('BC_Parks.Rda')
+parks_data <- DATA
+load('BC_Covariates.Rda')
+library(viridis)
+library(colorspace)
+library(spatstat)
+library(sf)
+```
+
+```{r}
+data <- read.csv("BC_owl_data.csv")
+
+data_sf <- st_as_sf(data, coords = c("decimalLongitude", "decimalLatitude"), crs = 4326)
+
+wgs84 <- st_crs("+proj=longlat +datum=WGS84 +no_defs")
+bc_albers <- st_crs("+proj=aea +lat_0=45 +lon_0=-126 +lat_1=50 +lat_2=58.5 +x_0=1000000 +y_0=0 +datum=NAD83 +units=m +no_defs")
+
+# Transform coordinates to BC Albers projection
+data_bc_albers <- st_transform(data_sf, crs = bc_albers)
+
+# Extract the transformed coordinates
+bc_x <- st_coordinates(data_bc_albers)[, 1]
+bc_y <- st_coordinates(data_bc_albers)[, 2]
+
+bc_win <- as.owin(parks_data$Window)
+
+owls_ppp <- ppp(x = bc_x, # X coordinates
+                    y = bc_y, # Y coordinates
+                    window = bc_win) # Observation window
+
+# marks(owls_ppp) <- data.frame(year = data$year, 
+#                                locality = data$locality)
+
+plot(owls_ppp)
+
+```
+
+```{r}
+col_pal <- magma(length(unique(data$year)))
+
+plot(owls_ppp,
+     which.marks = "year",
+     col = "grey90",
+     cols = col_pal,
+     par(bg="grey75", cex.main = 3),
+     main = "BC Parks point data",
+     legend=T)
+```
