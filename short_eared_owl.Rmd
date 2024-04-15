@@ -17,9 +17,13 @@ library(viridis)
 library(colorspace)
 library(spatstat)
 library(sf)
+library(splines)
+library(mgcv)
 ```
 
-```{r}
+### Data Pre-processing, don't need to run again, can use filtered data in new csv file directly. 
+
+```{r, eval=FALSE}
 data <- read.csv("BC_owl_data.csv")
 
 data_sf <- st_as_sf(data, coords = c("decimalLongitude", "decimalLatitude"), crs = 4326)
@@ -34,19 +38,54 @@ data_bc_albers <- st_transform(data_sf, crs = bc_albers)
 bc_x <- st_coordinates(data_bc_albers)[, 1]
 bc_y <- st_coordinates(data_bc_albers)[, 2]
 
+data$x_coord <- bc_x
+data$y_coord <- bc_y
+
 bc_win <- as.owin(parks_data$Window)
 
 owls_ppp <- ppp(x = bc_x, # X coordinates
                     y = bc_y, # Y coordinates
                     window = bc_win) # Observation window
 
-# marks(owls_ppp) <- data.frame(year = data$year, 
-#                                locality = data$locality)
+# Filtering for points inside the window
+inside_window <- inside.owin(owls_ppp, w=bc_win)
+owls_ppp <- owls_ppp[inside_window]
+
+
+inside_indices <- rep(FALSE, nrow(data))
+
+# Populate the vector
+for (i in 1:nrow(data)) {
+    x_coord <- data$x_coord[i]
+    y_coord <- data$y_coord[i]
+    inside_indices[i] <- inside.owin(x = x_coord, y = y_coord, w = owls_ppp$window)
+}
+
+# Subset data using the logical vector
+filtered_data <- data[inside_indices, ]
+
+
+# marks(owls_ppp) <- data.frame(year = data$year, locality = data$locality)
 
 plot(owls_ppp)
 
 ```
 
+# Begin Here
+```{r, warning=FALSE}
+data <- read.csv("filtered_owl_data.csv")
+
+bc_win <- as.owin(parks_data$Window)
+
+owls_ppp <- ppp(x = data$x_coord, # X coordinates
+                    y = data$y_coord, # Y coordinates
+                    window = bc_win) # Observation window
+
+marks(owls_ppp) <- data.frame(year = data$year, locality = data$locality)
+
+```
+
+## Plot of Owls by Year
 ```{r}
 col_pal <- magma(length(unique(data$year)))
 
@@ -55,6 +94,244 @@ plot(owls_ppp,
      col = "grey90",
      cols = col_pal,
      par(bg="grey75", cex.main = 3),
-     main = "BC Parks point data",
+     main = "Short Eared Owl over Years",
      legend=T)
 ```
+
+## Plotting Owls by Elevation
+```{r}
+# Plotting graph
+elev_class <- cut(DATA$Elevation,
+         3,
+         labels = c("low","medium", "high"))
+
+plot(cut(DATA$Elevation,
+         3,
+         labels = c("low","medium", "high")),
+     main = "Owls by Elevation classes")
+
+points(owls_ppp, pch = 20)
+
+# Identifying which class most parks fall under
+table(elev_class[owls_ppp])
+```
+
+Can see from the above plot that the owls tend to stay in regions of low elevations. 
+
+## Plotting Owls by Distance from Water
+```{r}
+# Plotting graph
+plot(DATA$Dist_Water,
+     main = "Owls by Distance from Water")
+
+points(owls_ppp, pch = 20)
+
+```
+
+Based on the above plot, can see owls in regions which are close and medium distances from water, but again these correspond to areas of lower elevation. 
+
+## Looking at Owl density based on elevation
+```{r}
+
+# Calculating Median elevation in BC and of Owls
+BC_median_elevation <- median(DATA$Elevation)
+print(BC_median_elevation)
+owl_median_elevation <- median(DATA$Elevation[owls_ppp])
+print(owl_median_elevation)
+
+# Generating KDE for elevation in BC and for elevation of BC parks
+BC_elevation_density <- density(DATA$Elevation[])
+owl_elevation_density <- density(DATA$Elevation[owls_ppp])
+
+# Plotting density of elevation in BC
+plot(BC_elevation_density, main = "Density of BC Elevation and Owl Elevation", 
+     xlab = "Elevation", ylab = "Density", col = "red", lwd = 2, 
+     ylim = range(c(BC_elevation_density$y, owl_elevation_density$y)))
+
+# Adding density of BC park elevations
+lines(owl_elevation_density, col = "blue", lwd = 2)
+
+# Including legend
+legend("topright", legend = c("BC Elevation", "Owl Elevation"), 
+       col = c("red", "blue"), lwd = 2)
+
+```    
+
+Observing the density of Owl elevations to the density of BC elevation in general, we can see the density of Owl elevations is highest around near 0 whereas the density of elevation of BC is highest near 1000. Owl density falls very fast as elevation increases. This indicates the spatial distribution of owls is not random with respect to elevation, if it was random, we would see more overlap between the 2 densities.  
+
+## Spatial distribution of Owls
+
+```{r}
+
+# density estimation
+lambda_hat <- density(owls_ppp)
+plot(lambda_hat, main='Spatial Distribution of Owls')
+points(owls_ppp)
+
+```
+
+Based on the above spatial distribution, the owls are not randomly distributed across the window but rather its concentrated in the bottom left of BC, suggesting the process is not homogeneous. 
+
+
+## Quadrat test for homogeniety
+
+```{r}
+# Split into a 5 by 5 quadrat and count points
+Q <- quadratcount(owls_ppp,
+                  nx = 4,
+                  ny = 4)
+
+plot(Q,
+     main = "Owl intensity")
+
+plot(owls_ppp,
+     pch = 16,
+     cex = 0.5,
+     cols = "red",
+     add = T)
+
+quadrat.test(Q)
+
+```
+
+Based on the above quadrat test, the small p-value suggests the null hypothesis should be rejected, ie. there is significant evidence against the assumption of homogeneity, therefore, the intensity, if calculated, under the assumption of homogeneity would be inaccurate. In addition, looking at the plot of quadrat counts, it also shows the intensity is not homogeneous. 
+
+## Estimating Owls as a function of Elevation
+
+```{r, warning=FALSE}
+
+# Estimate Rho
+rho_elev <- rhohat(owls_ppp, DATA$Elevation)
+
+par(mfrow = c(1,2))
+plot(rho_elev, xlim = c(0, 3000))
+plot(rho_elev, xlim = c(10, 450))
+
+rho_water_dist <- rhohat(owls_ppp, DATA$Dist_Water)
+
+plot(rho_water_dist)
+
+rho_forest <- rhohat(owls_ppp, DATA$Forest)
+
+plot(rho_forest)
+
+
+
+``` 
+
+Based on the above plots, there seems to be some sort of relationship between owl intensity and elevation up to 100m and then hovers around the mean, which falls in line with previous expectation that owls prefer lower elevation regions.    
+     
+Similarly, based on the distance from water, there seems no relationship between owl intensity and distance from water.   
+Finally, there does seem to be a non-linear relationship between owl intensity and percent of forest coverage, where owl intensity is high for forest coverage between 0 to 40%.    
+
+## Correlation between owl sightings
+```{r}
+
+# Estimate a strictly positive density
+lambda_owls_pos <- density(owls_ppp,
+                          sigma=bw.ppl,
+                          positive=TRUE)
+
+#Simulation envelope (with points drawn from the estimated intensity)
+E_owls_inhom <- envelope(owls_ppp,
+                        Kinhom,
+                        simulate = expression(rpoispp(lambda_owls_pos)),
+                        correction="border",
+                        rank = 1,
+                        nsim = 19,
+                        fix.n = TRUE)
+plot(E_owls_inhom,
+     main = "",
+     lwd = 2)
+
+```     
+Based on the above plot, it suggests there is some correlation between owl locations for r less than 5000 meters.     
+        
+
+## Evaluating Owl Clustering
+```{r, eval=FALSE}
+
+g_inhom <- pcfinhom(owls_ppp)
+plot(g_inhom)
+
+pcf_owls_inhom <- envelope(owls_ppp,
+                          pcfinhom,
+                          simulate = expression(rpoispp(lambda_owls_pos)),
+                          rank = 1,
+                          nsim = 19)
+
+par(mfrow = c(1,2))
+plot(pcf_owls_inhom)
+# Zoom in
+plot(pcf_owls_inhom,
+      xlim = c(0,15000),
+      main = "",
+      lwd = 2)
+
+```
+
+
+## Fitting a model for owl intensity with respect to elevation and forest coverage
+
+### Getting owls_ppp object without marks
+```{r, warning=FALSE}
+data <- read.csv("filtered_owl_data.csv")
+
+bc_win <- as.owin(parks_data$Window)
+
+owls_ppp <- ppp(x = data$x_coord, # X coordinates
+                    y = data$y_coord, # Y coordinates
+                    window = bc_win) # Observation window
+```
+
+
+```{r, warning=FALSE}
+
+fit <- ppm(owls_ppp ~ Elevation + I(Elevation^2) + Forest + I(Forest^2), data = DATA)
+print(AIC(fit))
+```
+
+## Quadrat test for model validation
+```{r, warning=FALSE}
+
+# Run the quadrat test
+quadrat.test(fit, nx = 4, ny = 2)
+
+```
+
+Based on p-value being very small, this indicates a significant deviation from our model’s predictions. As an improvement, rather than using a quadratic model, a GAM could be used to fit instead, to better handle a more non-linear relationship. 
+
+
+```{r, warning=FALSE}
+fit_smooth <- ppm(owls_ppp ~ bs(Elevation,8) + bs(Forest, 8), data = DATA, use.gam = TRUE)
+print(AIC(fit_smooth))
+
+change <- AIC(fit) - AIC(fit_smooth)
+
+print(change)
+
+anova(fit, fit_smooth, test = "LRT")
+```
+
+Based on the difference in AIC and the likelihood ratio test, we choose the more complex model, which was fit using GAMs over the quadratic model. 
+
+
+# Visualizing predictions
+
+```{r}
+
+# Plot the model predictions
+plot(fit_smooth,
+     se = FALSE,
+     superimpose = FALSE,
+     main = "Estimated Short-Eared Owl Intensity")
+
+# Overlay Owl Locations
+plot(owls_ppp,
+     pch = 16,
+     cex = 0.6,
+     cols = "black",
+     add = TRUE)
+
+```
+
